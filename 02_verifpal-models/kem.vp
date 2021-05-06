@@ -1,0 +1,57 @@
+// Verifpal KEM Implementation
+// Copyright (c) 2021 Robert Bosch GmbH
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Author: Friedrich Wiemer, friedrich.wiemer@de.bosch.com
+
+attacker[active]
+
+// KEM definition
+// pk, sk <- KeyGen
+// c, K <- encaps(pk)
+// K = decaps(sk, c)
+
+// presharing public keys
+principal Alice[
+    knows private sk_a
+    pk_a = G^sk_a
+]
+principal Bob[
+    knows private sk_b
+    pk_b = G^sk_b
+]
+Alice -> Bob: [pk_a]
+Bob -> Alice: [pk_b]
+
+// KEM encaps
+principal Alice[
+    generates Nonce
+    K_a = HKDF(pk_b, Nonce, nil)
+    c = PKE_ENC(pk_b, Nonce)
+]
+
+Alice -> Bob: c
+
+// KEM decaps
+principal Bob[
+    Nonce_dec = PKE_DEC(sk_b, c)
+    K_b = HKDF(pk_b, Nonce_dec, nil)
+]
+
+queries[
+    confidentiality? K_a
+    confidentiality? K_b
+    freshness? c
+]

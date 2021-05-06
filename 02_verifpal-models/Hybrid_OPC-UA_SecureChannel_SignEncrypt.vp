@@ -1,0 +1,163 @@
+// Formal Security Analysis Hybrid OPC UA
+// Copyright (c) 2021 Robert Bosch GmbH
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Author: Friedrich Wiemer, friedrich.wiemer@de.bosch.com
+
+// Setup, Client & Server Certificates
+attacker[active]
+principal Client[
+    knows private secret_key_client
+    knows private secret_key_client_pq
+    public_key_client = G^secret_key_client
+    public_key_client_pq = G^secret_key_client_pq
+    cert_client = CONCAT(public_key_client, public_key_client_pq)
+
+    knows private GEReq
+]
+principal Server[
+    knows private secret_key_server
+    knows private secret_key_server_pq
+    public_key_server = G^secret_key_server
+    public_key_server_pq = G^secret_key_server_pq
+    cert_server = CONCAT(public_key_server, public_key_server_pq)
+    
+    knows private GERes
+]
+
+// GetEndpointRequest
+Client -> Server: GEReq
+
+// GetEndpointResponse
+Server -> Client: GERes, cert_server
+
+// OpenSecureChannel Request
+principal Client[
+    pk_S, pk_S_pq = SPLIT(cert_server)
+
+    generates ClientNonce
+    knows private secret_kem_client
+    public_kem_client = G^secret_kem_client
+
+    OpenSecureChannel_request_body = CONCAT(
+        cert_client,
+        HASH(cert_server),
+        public_kem_client,
+        PKE_ENC(pk_S, ClientNonce))
+    osc_req_sign = HASH(CONCAT(
+        cert_client,
+        HASH(cert_server),
+        public_kem_client,
+        ClientNonce))
+    OpenSecureChannel_request_signature = SIGN(secret_key_client, osc_req_sign)
+    OpenSecureChannel_request_signature_pq = SIGN(secret_key_client_pq, osc_req_sign)
+]
+Client -> Server: OpenSecureChannel_request_body,
+    OpenSecureChannel_request_signature,
+    OpenSecureChannel_request_signature_pq
+
+// OpenSecureChannel Response
+principal Server[
+    cert_client_recv, cert_server_hash, pk_C_kem, ClientNonce_enc = SPLIT(OpenSecureChannel_request_body)
+    pk_C, pk_C_pq = SPLIT(cert_client_recv)
+    _ = ASSERT(HASH(cert_server), cert_server_hash)?
+    ClientNonce_recv = PKE_DEC(secret_key_server, ClientNonce_enc)
+    osc_req_sign_recv = HASH(CONCAT(cert_client_recv, HASH(cert_server), pk_C_kem, ClientNonce_recv))
+    _ = SIGNVERIF(pk_C, osc_req_sign_recv, OpenSecureChannel_request_signature)?
+    _ = SIGNVERIF(pk_C_pq, osc_req_sign_recv, OpenSecureChannel_request_signature_pq)?
+
+    generates ServerNonce
+
+    // KEM CT_kem, SS_kem <- encaps(pk_C_kem)
+    generates K_kem
+    SS_kem = HKDF(pk_C_kem, K_kem, nil)
+    CT_kem = PKE_ENC(pk_C_kem, K_kem)
+
+    // generate key material
+    Client_Signing_Key_server, Client_Encrypting_Key_server, Client_IV_server = HKDF(nil,
+        CONCAT(ServerNonce, ClientNonce_recv, SS_kem), nil)
+    Server_Signing_Key_server, Server_Encrypting_Key_server, Server_IV_server = HKDF(nil,
+        CONCAT(ClientNonce_recv, ServerNonce, SS_kem), nil)
+    
+    mac_xtm = MAC(Server_Signing_Key_server,
+        CONCAT(CT_kem, ClientNonce_recv, ServerNonce))
+
+    OpenSecureChannel_response_body = CONCAT(
+        cert_server,
+        HASH(cert_client_recv),
+        CT_kem,
+        mac_xtm,
+        PKE_ENC(pk_C, ServerNonce))
+    osc_res_sign = HASH(CONCAT(
+        cert_server,
+        HASH(cert_client_recv),
+        CT_kem,
+        mac_xtm,
+        ServerNonce))
+    OpenSecureChannel_response_signature = SIGN(secret_key_server, osc_res_sign)
+    OpenSecureChannel_response_signature_pq = SIGN(secret_key_server_pq, osc_res_sign)
+
+]
+Server -> Client: OpenSecureChannel_response_body,
+    OpenSecureChannel_response_signature,
+    OpenSecureChannel_response_signature_pq
+
+principal Client[
+    cert_server_recv1, cert_client_hash, CT_kem_recv, mac_xtm_recv, ServerNonce_enc = SPLIT(
+        OpenSecureChannel_response_body)
+    _ = ASSERT(cert_server, cert_server_recv1)?
+    _ = ASSERT(HASH(cert_client), cert_client_hash)?
+    ServerNonce_recv = PKE_DEC(secret_key_client, ServerNonce_enc)
+    osc_res_sign_recv = HASH(CONCAT(
+        cert_server,
+        HASH(cert_client),
+        CT_kem_recv,
+        mac_xtm_recv,
+        ServerNonce_recv))
+    _ = SIGNVERIF(pk_S, osc_res_sign_recv, OpenSecureChannel_response_signature)?
+
+    // KEM SS_kem <- decaps(secret_kem_client, CT_kem)
+    K_kem_dec = PKE_DEC(secret_kem_client, CT_kem_recv)
+    SS_kem_recv = HKDF(public_kem_client, K_kem_dec, nil)
+]
+
+principal Client[
+    Client_Signing_Key_client, Client_Encrypting_Key_client, Client_IV_client = HKDF(nil,
+        CONCAT(ServerNonce_recv, ClientNonce, SS_kem_recv), nil)
+    Server_Signing_Key_client, Server_Encrypting_Key_client, Server_IV_client = HKDF(nil,
+        CONCAT(ClientNonce, ServerNonce_recv, SS_kem_recv), nil)
+
+    _ = ASSERT(
+        MAC(Server_Signing_Key_client,
+            CONCAT(CT_kem_recv, ClientNonce, ServerNonce_recv)),
+        mac_xtm_recv)?
+]
+
+// security objectives
+
+queries [
+    authentication? Client -> Server: OpenSecureChannel_request_signature
+    authentication? Server -> Client: OpenSecureChannel_response_signature
+
+    confidentiality? Client_Signing_Key_client
+    confidentiality? Client_Signing_Key_server
+    confidentiality? Client_Encrypting_Key_client
+    confidentiality? Client_Encrypting_Key_server
+
+    confidentiality? Server_Signing_Key_client
+    confidentiality? Server_Signing_Key_server
+    confidentiality? Server_Encrypting_Key_client
+    confidentiality? Server_Encrypting_Key_server
+]

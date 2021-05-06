@@ -1,0 +1,356 @@
+(*
+    Formal Security Analysis of Hybrid OPC UA
+    Copyright (c) 2021 Robert Bosch GmbH
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published
+    by the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+    This source code is derived from Fixed OPC UA Open Secure Channel
+    Copyright (c) 2014-2017 Univ. Grenoble Alpes,
+    cf. 3rd-party-licenses.txt file in the root directory of this source tree.
+*)
+
+(*
+    Author: Sebastian Paul, sebastian.paul2@de.bosch.com
+*)
+
+(*
+OPC UA Secure Channel: Hybrid
+
+Involved parties: client C, server S, discovery endpoint EP
+
+Message 1 - GetEndpointRequest:         C -> EP
+Message 2 - GetEndpointResponse:        EP -> C
+Message 3 - OpenSecureChannel Request:  C -> S
+Message 4 - OpenSecureChannel Response: S -> C
+
+The heart of the protocol is message 3 and 4.
+*)
+
+
+(* ------------------------------------
+    Channel
+-------------------------------------- *)
+free c: channel.
+
+type nonce.
+type host.
+type label.
+
+(* 3 honest parties *)
+free A, B, C: host.
+
+fun nonce_to_bitstring(nonce): bitstring [data, typeConverter].
+fun bitstring_to_nonce(bitstring): nonce [data, typeConverter].
+
+const client_secret, server_secret: label.
+
+(* ------------------------------------
+    Declarations
+-------------------------------------- *)
+
+(* Hash Function *)
+fun hash_ideal(bitstring): bitstring.
+
+(* XOR *)
+fun xor_enc(bitstring, bitstring): bitstring.
+reduc forall k:bitstring, x:bitstring;
+    xor_dec(k, xor_enc(k,x)) = x.
+
+(* Key Derivation *)
+type kem_secret.
+
+fun prf(bitstring, bitstring): bitstring.
+fun pq_nonce_prf(nonce, nonce, label, kem_secret): nonce.
+
+(* Symmetric Encryption *)
+type symkey.
+fun b2sym(bitstring):symkey [data, typeConverter].
+
+fun aes_enc(bitstring, symkey): bitstring.
+fun aes_dec(bitstring, symkey): bitstring.
+
+equation forall x: bitstring, k: symkey;
+    aes_dec(aes_enc(x, k), k) = x.
+equation forall x: bitstring, k: symkey;
+    aes_enc((aes_dec(x, k)), k) = x.
+
+(* HMAC *)
+type mac_key.
+fun bitstring_to_mackey(bitstring): mac_key.
+fun symkey_to_mackey(symkey): bitstring  [data, typeConverter].
+
+fun hmac_ideal(mac_key, bitstring): bitstring.
+
+(* Public Key Encryption *)
+type privkey.
+type pubkey.
+fun pk(privkey): pubkey.
+fun sk(host): privkey.
+
+fun rsa_enc(pubkey, bitstring): bitstring.
+reduc forall k:privkey, x:bitstring;
+    rsa_dec(k, rsa_enc(pk(k),x)) = x.
+
+
+(* Key Encapsulation Mechanism *)
+type kem_keypairseed.
+type kem_seed.
+type kem_privkey.
+type kem_pubkey.
+type kem_ciphertext.
+
+(*Key Generation() -> (PK,SK)*)
+fun kem_pk(kem_keypairseed): kem_pubkey.
+fun kem_sk(kem_keypairseed): kem_privkey.
+letfun kem_keygen() =
+    new s:kem_keypairseed;
+    let keygen_pk = kem_pk(s) in
+    let keygen_sk = kem_sk(s) in
+    (keygen_pk, keygen_sk).
+
+(*Encapsulation(public key) -> (secret, ciphertext)*)
+fun kem_encap_r_secret(kem_seed, kem_pubkey): kem_secret.
+fun kem_encap_r_enc(kem_seed, kem_pubkey): kem_ciphertext.
+
+letfun kem_encap(pk:kem_pubkey) =
+    new k:kem_seed;
+    let encap_secret = kem_encap_r_secret(k, pk) in
+    let encap_ciphertext = kem_encap_r_enc(k, pk) in
+    (encap_secret, encap_ciphertext).
+
+(*Decapsulation(ciphertext, secretkey) -> (secret)*)
+reduc forall k:kem_seed, ks:kem_keypairseed;
+    kem_decap(
+        kem_encap_r_enc(k, kem_pk(ks)),
+        kem_sk(ks)
+    ) = kem_encap_r_secret(k, kem_pk(ks)).
+
+fun ct2bitstring(kem_ciphertext):bitstring [data, typeConverter].
+
+(* Digital Signatures *)
+fun sign(privkey, bitstring): bitstring.
+
+fun verify(pubkey, bitstring, bitstring): bool
+reduc forall k:privkey, x:bitstring;
+      verify(pk(k), x, sign(k,x)) = true.
+
+(* Key table for certificates *)
+table public_keys(host, pubkey).
+
+(* Constants *)
+const GetEndpointRequest: bitstring.
+const GetEndpointResponse: bitstring.
+const OpenSecureChannelRequest: bitstring.
+const OpenSecureChannelResponse: bitstring.
+
+const SignEncrypt: bitstring.
+
+free skC: privkey [private].
+free skS: privkey [private].
+free skEP: privkey [private].
+
+free skC_pq: privkey [private].
+free skS_pq: privkey [private].
+free skEP_pq: privkey [private].
+
+
+(* Authentication Events *)
+event initiateOSC_Client(host, host, nonce, kem_privkey).
+event terminateOSC_Client(host, host, nonce, nonce).
+event initiateOSC_Server(host, host, nonce, nonce).
+event terminateOSC_Server(host, host, nonce, nonce).
+
+(* Secrecy *)
+fun messageCli_S(pubkey, pubkey, pubkey, pubkey): bitstring [private].
+fun messageSrv_S(pubkey, pubkey, pubkey, pubkey): bitstring [private].
+fun messageCli_C(pubkey, pubkey, pubkey, pubkey): bitstring [private].
+fun messageSrv_C(pubkey, pubkey, pubkey, pubkey): bitstring [private].
+
+(* Queries *)
+query attacker(messageCli_S(pk(skC), pk(skC_pq), pk(skS), pk(skS_pq))).
+query attacker(messageSrv_S(pk(skC), pk(skC_pq), pk(skS), pk(skS_pq))).
+query attacker(messageCli_C(pk(skS), pk(skS_pq), pk(skC), pk(skC_pq))).
+query attacker(messageSrv_C(pk(skS), pk(skS_pq), pk(skC), pk(skC_pq))).
+
+query X: host, Y: host, N: nonce, N_PQ:nonce, PK:kem_privkey; event(terminateOSC_Server(X, Y, N, N_PQ)) ==> event(initiateOSC_Client(X, Y, N, PK)).
+query X: host, Y: host, N: nonce, N_PQ:nonce ; event(terminateOSC_Client(X, Y, N, N_PQ)) ==> event(initiateOSC_Server(X, Y, N, N_PQ)).
+
+(*
+---------------------------------------------------
+     Process macros: define subprocesses
+---------------------------------------------------
+*)
+
+(* Client Process *)
+let process_client(skA:privkey, skA_pq:privkey, skB:privkey, skB_pq:privkey, skC: privkey, skC_pq:privkey) =
+    in(c, (Client: host, Endpoint: host, Server: host));
+    let skClient = if Client = A then skA else if Client = B then skB else if Client = C then skC in
+    let sk_pqClient = if Client = A then skA_pq else if Client = B then skB_pq else if Client = C then skC_pq in
+    let pkClient = pk(skClient) in
+    let pk_pqClient = pk(sk_pqClient) in
+
+    let pkEndpoint = if Endpoint = A then pk(skA) else if Endpoint = B then pk(skB) else if Endpoint = C then pk(skC) else pk(sk(Endpoint)) in
+    let pk_pqEndpoint = if Endpoint = A then pk(skA_pq) else if Endpoint = B then pk(skB_pq) else if Endpoint = C then pk(skC_pq) else pk(sk(Endpoint)) in
+
+    let pkServer = if Server = A then pk(skA) else if Server = B then pk(skB) else if Server = C then pk(skC) else pk(sk(Server)) in
+    let pk_pqServer = if Server = A then pk(skA_pq) else if Server = B then pk(skB_pq) else if Server = C then pk(skC_pq) else pk(sk(Server)) in
+
+    (* send GetEndpointRequest *)
+    out(c, GetEndpointRequest);
+
+    (* receive GetEndpointResponse *)
+    in(c, (=GetEndpointResponse, =pkServer, =pk_pqServer, =SignEncrypt, SP: bitstring));
+
+    (* generate client nonce + KEM key generation *)
+    new Nclient: nonce;
+    let (pq_kem_pk:kem_pubkey, pq_kem_sk:kem_privkey) = kem_keygen() in
+
+    (* send Hybrid OpenSecureChannelRequest *)
+    new RL:bitstring;
+    let sig_OPN_Request = sign(skClient, hash_ideal((OpenSecureChannelRequest, pkClient, pk_pqClient, Server, pq_kem_pk, nonce_to_bitstring(Nclient), RL))) in
+    let sig_pq_OPN_Request = sign(sk_pqClient, hash_ideal((OpenSecureChannelRequest, pkClient, pk_pqClient, Server, pq_kem_pk, nonce_to_bitstring(Nclient), RL))) in
+    let enc_OPN_Request = rsa_enc(pkServer, (nonce_to_bitstring(Nclient), RL, sig_OPN_Request)) in
+    event initiateOSC_Client(Client, Server, Nclient, pq_kem_sk);
+    out(c, (OpenSecureChannelRequest, pkClient, pk_pqClient, Server, pq_kem_pk, enc_OPN_Request, sig_pq_OPN_Request));
+
+    (* receive OpenSecureChannelResponse *)
+    in(c, (=OpenSecureChannelResponse, =pkServer, =pk_pqServer, =Client, ciphertext:kem_ciphertext, xor_t_mac:bitstring, enc_OPN_Response:bitstring, sig_pq_OPN_Response:bitstring));
+
+    (* decrypt and verify signature of response *)
+    let (Nserver:nonce, ST:bitstring, sig_OPN_Response:bitstring ) = rsa_dec(skClient, enc_OPN_Response) in
+    if
+        (verify(pkServer, hash_ideal((OpenSecureChannelResponse, pkServer, pk_pqServer, Client, ciphertext, xor_t_mac, nonce_to_bitstring(Nserver), ST)), sig_OPN_Response) <> true) ||
+        (verify(pk_pqServer, hash_ideal((OpenSecureChannelResponse, pkServer, pk_pqServer, Client, ciphertext, xor_t_mac, nonce_to_bitstring(Nserver), ST)), sig_pq_OPN_Response) <> true ) then 0
+    else
+
+    (* decapsulate secret and derive two pairs of symmetric keys and combine them using XOR *)
+    let keys_client_conv_C:bitstring = prf(nonce_to_bitstring(Nserver), nonce_to_bitstring(Nclient)) in
+    let keys_server_conv_C:bitstring = prf(nonce_to_bitstring(Nclient), nonce_to_bitstring(Nserver)) in
+
+    let pq_secret = kem_decap(ciphertext, pq_kem_sk) in
+    let Nclient_pq = pq_nonce_prf(Nserver, Nclient, client_secret, pq_secret) in
+    let Nserver_pq = pq_nonce_prf(Nclient, Nserver, server_secret, pq_secret) in
+
+    let keys_client_pq_C:bitstring = prf(nonce_to_bitstring(Nserver_pq), nonce_to_bitstring(Nclient_pq)) in
+    let keys_server_pq_C:bitstring = prf(nonce_to_bitstring(Nclient_pq), nonce_to_bitstring(Nserver_pq)) in
+
+    let keys_client_C:bitstring = xor_enc(keys_client_conv_C, keys_client_pq_C) in
+    let keys_server_C:bitstring = xor_enc(keys_server_conv_C, keys_server_pq_C) in
+
+    if xor_t_mac = hmac_ideal(bitstring_to_mackey(keys_server_C), (ct2bitstring(ciphertext), nonce_to_bitstring(Nserver), nonce_to_bitstring(Nclient))) then
+    out(c, aes_enc(messageSrv_C(pkServer, pk_pqServer, pkClient, pk_pqClient), b2sym(keys_server_C)));
+    out(c, aes_enc(messageCli_C(pkServer, pk_pqServer, pkClient, pk_pqClient), b2sym(keys_client_C)));
+
+    if Server = A || Server = B || Server = C then
+    event terminateOSC_Client(Server, Client, Nserver, Nserver_pq).
+
+
+(* Server Process *)
+let process_server(skA:privkey, skA_pq:privkey, skB:privkey, skB_pq:privkey, skC: privkey, skC_pq:privkey) =
+    in(c, (Client: host, Endpoint: host, Server: host));
+    let skServer = if Server = A then skA else if Server = B then skB else if Server = C then skC in
+    let sk_pqServer = if Server = A then skA_pq else if Server = B then skB_pq else if Server = C then skC_pq in
+    let pkServer = pk(skServer) in
+    let pk_pqServer = pk(sk_pqServer) in
+    let pkClient = if Client = A then pk(skA) else if Client = B then pk(skB) else if Client = C then pk(skC) else pk(sk(Client)) in
+    let pk_pqClient = if Client = A then pk(skA_pq) else if Client = B then pk(skB_pq) else if Client = C then pk(skC_pq) else pk(sk(Client)) in
+    let pkEndpoint = if Endpoint = A then pk(skA) else if Endpoint = B then pk(skB) else if Endpoint = C then pk(skC) else pk(sk(Endpoint)) in
+    let pk_pqEndpoint = if Endpoint = A then pk(skA_pq) else if Endpoint = B then pk(skB_pq) else if Endpoint = C then pk(skC_pq) else pk(sk(Endpoint)) in
+
+    (* Receive OpenSecureChannelRequest *)
+    in(c, (=OpenSecureChannelRequest, =pkClient, =pk_pqClient, =Server, pq_kem_pk:kem_pubkey, enc_OPN_Request:bitstring, sig_pq_OPN_Request:bitstring));
+
+    (* decrypt request and verify signature *)
+    let (Nclient:nonce, RL:bitstring, sig_OPN_Request:bitstring) = rsa_dec(skServer, enc_OPN_Request) in
+    if
+        (verify(pkClient, hash_ideal((OpenSecureChannelRequest, pkClient, pk_pqClient, Server, pq_kem_pk, nonce_to_bitstring(Nclient), RL)), sig_OPN_Request) <> true) ||
+        (verify(pk_pqClient, hash_ideal((OpenSecureChannelRequest, pkClient, pk_pqClient, Server, pq_kem_pk, nonce_to_bitstring(Nclient), RL)), sig_pq_OPN_Request) <> true) then 0
+    else
+
+    (* generate server nonce, encapsulate secret and derive two pairs of symmetric keys and combine them using XOR *)
+    new Nserver: nonce;
+    let keys_server_conv_S:bitstring = prf(nonce_to_bitstring(Nclient), nonce_to_bitstring(Nserver)) in
+    let keys_client_conv_S:bitstring = prf(nonce_to_bitstring(Nserver), nonce_to_bitstring(Nclient)) in
+
+    let (pq_secret:kem_secret, ciphertext:kem_ciphertext) = kem_encap(pq_kem_pk) in
+    let Nserver_pq = pq_nonce_prf(Nclient, Nserver, server_secret, pq_secret) in
+    let Nclient_pq = pq_nonce_prf(Nserver, Nclient, client_secret, pq_secret) in
+
+    let keys_server_pq_S:bitstring = prf(nonce_to_bitstring(Nclient_pq), nonce_to_bitstring(Nserver_pq)) in
+    let keys_client_pq_S:bitstring = prf(nonce_to_bitstring(Nserver_pq), nonce_to_bitstring(Nclient_pq)) in
+
+    let keys_server_S:bitstring = xor_enc(keys_server_conv_S, keys_server_pq_S) in
+    let keys_client_S:bitstring = xor_enc(keys_client_conv_S, keys_client_pq_S) in
+    let xor_t_mac = hmac_ideal(bitstring_to_mackey(keys_server_S), (ct2bitstring(ciphertext), nonce_to_bitstring(Nserver), nonce_to_bitstring(Nclient))) in
+
+    (* send OpenSecureChannelResponse *)
+    new ST: bitstring;
+
+    let sig_OPN_Response = sign(skServer, hash_ideal((OpenSecureChannelResponse, pkServer, pk_pqServer, Client, ciphertext, xor_t_mac, nonce_to_bitstring(Nserver), ST))) in
+    let sig_pq_OPN_Response = sign(sk_pqServer, hash_ideal((OpenSecureChannelResponse, pkServer, pk_pqServer, Client, ciphertext, xor_t_mac, nonce_to_bitstring(Nserver), ST))) in
+    let enc_OPN_Response = rsa_enc(pkClient, (nonce_to_bitstring(Nserver), ST, sig_OPN_Response)) in
+    event initiateOSC_Server(Server, Client, Nserver, Nserver_pq);
+    out(c, (OpenSecureChannelResponse, pkServer, pk_pqServer, Client, ciphertext, xor_t_mac, enc_OPN_Response, sig_pq_OPN_Response));
+
+    out(c, aes_enc(messageSrv_S(pkClient, pk_pqClient, pkServer, pk_pqServer), b2sym(keys_server_S)));
+    out(c, aes_enc(messageCli_S(pkClient, pk_pqClient, pkServer, pk_pqServer), b2sym(keys_client_S)));
+
+    if Client = A || Client = B || Client = C then
+    event terminateOSC_Server(Client, Server, Nclient, Nclient_pq).
+
+
+(* Discovery Process *)
+let process_endpoint(skA:privkey, skA_pq:privkey, skB:privkey, skB_pq:privkey, skC: privkey, skC_pq:privkey) =
+    in(c, (Client: host, Endpoint: host, Server: host));
+    let skEndpoint = if Endpoint = A then skA else if Endpoint = B then skB else if Endpoint = C then skC in
+    let sk_pqEndpoint = if Endpoint = A then skA_pq else if Endpoint = B then skB_pq else if Endpoint = C then skC_pq in
+    let pk_Endpoint = pk(skEndpoint) in
+    let pk_pqEndpoint = pk(sk_pqEndpoint) in
+
+    let pkClient = if Client = A then pk(skA) else if Client = B then pk(skB) else if Client = C then pk(skC) else pk(sk(Client)) in
+    let pk_pqClient = if Client = A then pk(skA_pq) else if Client = B then pk(skB_pq) else if Client = C then pk(skC_pq) else pk(sk(Client)) in
+
+    let pkServer = if Server = A then pk(skA) else if Server = B then pk(skB) else if Server = C then pk(skC) else pk(sk(Server)) in
+    let pk_pqServer = if Server = A then pk(skA_pq) else if Server = B then pk(skB_pq) else if Server = C then pk(skC_pq) else pk(sk(Server)) in
+
+    in(c, =GetEndpointRequest);
+
+    new SP: bitstring;
+    (*get public_keys(=Server, pkServer) in*)
+    out(c, (GetEndpointResponse, pkServer, pk_pqServer, SignEncrypt, SP)).
+
+(*
+---------------------------------------------------
+     Main
+---------------------------------------------------
+*)
+
+process
+    (* Construct private and public keys of all participants
+        and output all public keys on communication channel *)
+    let pkC = pk(skC) in out(c, pkC);
+    let pkC_pq = pk(skC_pq) in out(c, pkC_pq);
+
+    let pkS = pk(skS) in out(c, pkS);
+    let pkS_pq = pk(skS_pq) in out(c, pkS_pq);
+
+    let pkEP = pk(skEP) in out(c, pkEP);
+    let pkEP_pq = pk(skEP_pq) in out(c, pkEP_pq);
+
+    (* Start protocol *)
+
+    (   !process_client(skC, skC_pq, skEP, skEP_pq, skS, skS_pq) |
+        !process_server(skC, skC_pq, skEP, skEP_pq, skS, skS_pq) |
+        !process_endpoint(skC, skC_pq, skEP, skEP_pq,  skS, skS_pq)
+    )

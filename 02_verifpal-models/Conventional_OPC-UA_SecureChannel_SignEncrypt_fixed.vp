@@ -1,0 +1,113 @@
+// Formal Security Analysis Conventional OPC UA (Fixed-Version)
+// Copyright (c) 2021 Robert Bosch GmbH
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Author: Friedrich Wiemer, friedrich.wiemer@de.bosch.com
+
+// Setup, Client & Server Certificates
+attacker[active]
+principal Client[
+    knows private secret_key_client
+    public_key_client = G^secret_key_client
+    
+    knows private GEReq
+]
+principal Server[
+    knows private secret_key_server
+    public_key_server = G^secret_key_server
+
+    knows private GERes
+]
+
+// GetEndpointRequest
+Client -> Server: GEReq
+
+// GetEndpointResponse
+Server -> Client: GERes, public_key_server
+
+// OpenSecureChannel Request
+principal Client[
+    generates ClientNonce
+
+    OpenSecureChannel_request_body = CONCAT(public_key_client,
+        HASH(public_key_server), PKE_ENC(public_key_server, ClientNonce))
+    OpenSecureChannel_request_signature = SIGN(secret_key_client,
+        HASH(CONCAT(public_key_client, HASH(public_key_server), ClientNonce)))
+]
+Client -> Server: OpenSecureChannel_request_body, OpenSecureChannel_request_signature
+
+// OpenSecureChannel Response
+principal Server[
+    public_key_client_recv, pk_S_hash, osc_req = SPLIT(OpenSecureChannel_request_body)
+    ClientNonce_dec = PKE_DEC(secret_key_server, osc_req)
+    _ = ASSERT(HASH(public_key_server), pk_S_hash)?
+    _ = SIGNVERIF(public_key_client_recv,
+        HASH(CONCAT(public_key_client_recv,
+            HASH(public_key_server),
+            ClientNonce_dec)),
+        OpenSecureChannel_request_signature)?
+
+    generates ServerNonce
+
+    OpenSecureChannel_response_body = CONCAT(public_key_server,
+        HASH(public_key_client_recv), PKE_ENC(public_key_client_recv, ServerNonce))
+    OpenSecureChannel_response_signature = SIGN(secret_key_server,
+        HASH(CONCAT(public_key_server, HASH(public_key_client_recv), ServerNonce)))
+]
+Server -> Client: OpenSecureChannel_response_body, OpenSecureChannel_response_signature
+
+// generate key material
+principal Server[
+    Client_Signing_Key_server, Client_Encrypting_Key_server, Client_IV_server = HKDF(nil,
+        CONCAT(ServerNonce, ClientNonce_dec), nil)
+    Server_Signing_Key_server, Server_Encrypting_Key_server, Server_IV_server = HKDF(nil,
+        CONCAT(ClientNonce_dec, ServerNonce), nil)
+]
+
+principal Client[
+    pk_S_recv1, pk_C_hash, osc_rsp = SPLIT(OpenSecureChannel_response_body)
+    ServerNonce_dec = PKE_DEC(secret_key_client, osc_rsp)
+    _ = ASSERT(public_key_server, pk_S_recv1)?
+    _ = ASSERT(HASH(public_key_client), pk_C_hash)?
+    _ = SIGNVERIF(public_key_server,
+        HASH(CONCAT(public_key_server,
+            HASH(public_key_client),
+            ServerNonce_dec)),
+        OpenSecureChannel_response_signature)?
+]
+
+principal Client[
+    Client_Signing_Key_client, Client_Encrypting_Key_client, Client_IV_client = HKDF(nil,
+        CONCAT(ServerNonce_dec, ClientNonce), nil)
+    Server_Signing_Key_client, Server_Encrypting_Key_client, Server_IV_client = HKDF(nil,
+        CONCAT(ClientNonce, ServerNonce_dec), nil)
+]
+
+// security objectives
+
+queries [
+    authentication? Client -> Server: OpenSecureChannel_request_signature
+    authentication? Server -> Client: OpenSecureChannel_response_signature
+
+    confidentiality? Client_Signing_Key_client
+    confidentiality? Client_Signing_Key_server
+    confidentiality? Client_Encrypting_Key_client
+    confidentiality? Client_Encrypting_Key_server
+
+    confidentiality? Server_Signing_Key_client
+    confidentiality? Server_Signing_Key_server
+    confidentiality? Server_Encrypting_Key_client
+    confidentiality? Server_Encrypting_Key_server
+]
