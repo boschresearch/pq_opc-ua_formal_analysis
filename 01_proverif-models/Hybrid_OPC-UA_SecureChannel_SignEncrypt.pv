@@ -145,8 +145,6 @@ fun verify(pubkey, bitstring, bitstring): bool
 reduc forall k:privkey, x:bitstring;
       verify(pk(k), x, sign(k,x)) = true.
 
-(* Key table for certificates *)
-table public_keys(host, pubkey).
 
 (* Constants *)
 const GetEndpointRequest: bitstring.
@@ -327,7 +325,6 @@ let process_endpoint(skA:privkey, skA_pq:privkey, skB:privkey, skB_pq:privkey, s
     in(c, =GetEndpointRequest);
 
     new SP: bitstring;
-    (*get public_keys(=Server, pkServer) in*)
     out(c, (GetEndpointResponse, pkServer, pk_pqServer, SignEncrypt, SP)).
 
 (*

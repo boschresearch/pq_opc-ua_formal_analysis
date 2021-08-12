@@ -12,7 +12,7 @@ maintained nor monitored in any way.
 
 ## Requirements
 
-* ProVerif (2.02pl1 or above)
+* ProVerif (2.02pl1)
 * Verifpal (0.21.4 or above)
 
 ## License
