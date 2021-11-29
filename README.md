@@ -1,6 +1,7 @@
 # Towards Post-Quantum Security for Cyber-Physical Systems: Integrating PQC into Industrial M2M Communication
 
-This is the accompanying code for the paper [Towards Post-Quantum Security for Cyber-Physical Systems: Integrating PQC into Industrial M2M Communication](https://eprint.iacr.org/2020/1322).
+This is the accompanying code for the paper *"Towards Post-Quantum Security for Cyber-Physical Systems: Integrating PQC into Industrial M2M Communication"* that appeared in
+Journal of Computer Security (DOI: [10.3233/JCS-210037](https://dx.doi.org/10.3233/JCS-210037)); also available in Cryptology ePrint Archive: Report [2021/1563](https://ia.cr/2021/1563).
 
 In our extended version, we provide a symbolic proof of confidentiality and authentication properties for quantum-resistant OPC UA variants. Our security analysis is based on the renowned formal verification tool [ProVerif](https://prosecco.gforge.inria.fr/personal/bblanche/proverif/) and the recently introduced protocol verifier [Verifpal](https://verifpal.com/).
 The provided models allow the users to reproduce and extend the results reported in our work. Please cite the above paper when reporting, reproducing or extending the results.
